@@ -7,23 +7,37 @@ import java.io.File;
 public class Main
 {
     //Global program variables.
-    //public static boolean flag=true;
 
     //  SET THIS TO TRUE TO PRINT PROGRAM LOGS
-    public static final boolean PRINT_LOGS = true;
+    public static final boolean PRINT_LOGS = !true;
     //------------------------------
 
+    private static boolean flag;
     private static String rootDir;
-
-    protected static HashSet<String> approvers = new HashSet<>();
-    protected static HashMap<String, FileTree> mappings = new HashMap<>();
-    private static String[] files = null;
+    protected static String result;
+    protected static HashSet<String> approvers;
+    protected static HashMap<String, FileTree> mappings;
+    private static String[] files;
 
     //Store all Approved folders in a Set
-    private static HashSet<String> approvedFolders=new HashSet<>();
+    private static HashSet<String> approvedFolders;
 
     //Variable for keeping track of last recursion call's owners.
-    private static HashSet<String> parentOwners= new HashSet<String>();
+    private static HashSet<String> parentOwners;
+
+
+    //initialize global structures and variables
+    protected static void init(){
+        approvers = new HashSet<>();
+        mappings = new HashMap<>();
+        files = null;
+        approvedFolders = new HashSet<>();
+        parentOwners = new HashSet<>();
+        flag = false;
+
+
+
+    }
 
     public static void main(String[] args) throws Exception
     {
@@ -33,30 +47,25 @@ public class Main
         if(approversString == null)
             throw new Exception("NO APPROVERS PASSED IN ARGUMENTS");
 
-
-
-
-
-        //Get all changed files
+         //Get all changed files
         String changedFiles = args[3];
         if(changedFiles == null)
             throw new Exception("NO FILES PASSED IN ARGUMENTS");    //TODO: Mention in docs
 
-
-
-        //Get the root path from command line
+         //Get the root path from command line
         rootDir = args[5];
 
-        runValidation(approversString,changedFiles,rootDir);
-        //bigfunctiontocheckapprovers(approversString, changedFiles, rootDir);
+         String res=runValidation(approversString,changedFiles,rootDir);
+         System.out.println(res);
+
         //Build upward dependencies for each folder within the root.
 
 
         if(PRINT_LOGS)
             System.out.println("=================================");
 
-        //Checks all approvals, and exits /w notification if any approval is missing.
-        //checkAllApproved();
+
+
 
 
 
@@ -64,39 +73,44 @@ public class Main
     }
 
 
-    protected static void runValidation(String approversList, String filesToBeChecked, String rootPath) throws Exception{
+    protected static String runValidation(String approversList, String filesToBeChecked, String rootPath) throws Exception{
+
+        //Initialize
+        init();
 
         //We have approvers if we reach here.
-        for(String app : approversList.split(",")){
+        for(String app : approversList.split(","))
+        {
             approvers.add(app);
         }
 
         //We have files if we reach here
         files = filesToBeChecked.split(",");
 
-
         //Traverse directory root and build dependency hashmap for Upward dependencies
+        rootDir=rootPath;
         buildUpwardDependencies(rootDir);
 
-
-
-        //If we reach here, everyone is approved.
+         //Checks all approvals, and exits /w notification if any approval is missing.
         checkAllApproved();
 
-        System.out.println("Approved");
+        //If we reach here, everyone is approved.
+        if(flag)
+            return "Insufficient Approvals";
+        return "Approved";
+}
 
-
-
-    }
 
     protected static void buildUpwardDependencies(String dir) throws IOException
     {
         //Create an empty object for the folder.
-        FileTree current;
+         FileTree current;
+
         if(mappings.containsKey(dir))
             current = mappings.get(dir);
         else
             current = new FileTree(dir);
+
 
         //Add object to mappings.
         mappings.put(dir, current);
@@ -106,11 +120,8 @@ public class Main
         {
             //Add owners from file to object's set
             HashSet<String> currentOwners = new HashSet<>(Files.readAllLines(Paths.get(dir+"/OWNERS")));
-
             current.owners = currentOwners;
-            //parentOwners=currentOwners;
-            current.parents=parentOwners;
-            parentOwners = currentOwners;
+            parentOwners = currentOwners; //cache previous folder owners
         }
 
         //If there's no owners for the current folder we're looking at..
@@ -126,7 +137,6 @@ public class Main
         if(new File(dir + "/DEPENDENCIES").exists())
         {
             //Check if object exists
-
             List<String> currentDeps = Files.readAllLines(Paths.get(dir+"/DEPENDENCIES"));
             if(PRINT_LOGS)
             {
@@ -137,6 +147,7 @@ public class Main
 
             for(String temp : currentDeps)
             {
+                //Append root path to the current file path within root
                 temp = rootDir+ "/" +temp;
 
                 //If yes, add current folder to THAT folder.
@@ -183,8 +194,6 @@ public class Main
                 if(path.toFile().isDirectory())
                 {
                     buildUpwardDependencies(path.toFile().toString());
-                    //current.owners.addAll(parentOwners);
-                    current.parents=parentOwners;
                     parentOwners=current.owners;
                 }
                 //For files - required to check the existence of a file.
@@ -217,7 +226,10 @@ public class Main
 
             String folder = file.substring(0, lastSlash);
 
-            validateFolder(folder);
+           validateFolder(folder, true);
+
+            if(PRINT_LOGS)
+                System.out.println("===================(END OF FILE APPROVAL CHECK)=============");
         }
 
     }
@@ -230,7 +242,7 @@ public class Main
     /////////
     //Uses Set to cache previously approved folders to avoid redundant checks
 
-    private static void validateFolder(String file)
+    private static void validateFolder(String file, boolean checkDependencies)
     {
         //If a basic dependency has been approved, return from here!
         if(approvedFolders.contains(file))
@@ -246,25 +258,30 @@ public class Main
         int skip = 0;   //The number of levels we want to skip
         String[] pathPieces = file.split("/");
 
+        boolean approved = false;
+
+        HashSet<String> tempApprovedChildren = new HashSet<>();
+
         //Parent checker i.e after approving a current level, validate approval for level above till root.
         parentChecker: while(pathPieces.length - (skip + rootParts) + 1 > 0)    //Add 1 for the root folder
         {
-            int check=pathPieces.length - (skip + rootParts);
-
             //Build the path we want to check.
             StringBuilder checkPathSB = new StringBuilder(rootDir);
             for(int i=0; i<(pathPieces.length - rootParts - skip); i++)
             {
-
                 checkPathSB.append("/" + pathPieces[rootParts + i]);
 
             }
             String checkPath = checkPathSB.toString();
 
+            //Add cuurent approved path
+            tempApprovedChildren.add(checkPath);
+
             if(approvedFolders.contains(checkPath))
             {
                 if(PRINT_LOGS)
                     System.out.println("Already approved:\t\t\t" + checkPath);
+                approved = true;
                 break parentChecker;
             }
 
@@ -273,46 +290,57 @@ public class Main
 
             FileTree checkFolderObj = mappings.get(checkPath);
 
-            if(PRINT_LOGS)
-            {
-                Iterator test = checkFolderObj.dependencies.iterator();
-
-                while (test.hasNext())
-                {
-                        System.out.println("Dependencies of checkObj are " + test.next());
-                }
-            }
-
             //Check approvals for given folder object
-            boolean approved = false;
-            appcheck: for(String app : approvers)
+            for(String app : approvers)
             {
                 if(checkFolderObj.owners.contains(app))
                 {
                     approved = true;
                     approvedFolders.add(checkPath);
-                    break appcheck;
+                    break parentChecker;
                 }
             }
-            if(!approved)
-            {
-                //flag=false;
-                System.out.println("Insufficient Approvals");
-                System.exit(0);
-            }
 
-            //check if dependencies are approved
-            Iterator iterator = checkFolderObj.dependencies.iterator();
-            while(iterator.hasNext())
-            {
-                validateFolder((String) iterator.next());
-            }
 
             //increment the number of levels to skip by one
             skip++;
 
         }   //Ends Parent checker WHILE loop.
-    }
+
+        if(!approved)
+        {
+            //Use flag to mark insufficient approvals
+            flag=true;
+            return;
+        }
+        else
+            approvedFolders.addAll(tempApprovedChildren);
+        //Check flag to see if dependencies need to be checked
+        if(!checkDependencies)
+        {
+            return;
+
+        }
 
 
-}
+        if(PRINT_LOGS)
+        {
+            Iterator test = mappings.get(file).dependencies.iterator();
+
+            while (test.hasNext())
+            {
+                System.out.println("Dependencies of checkObj are " + test.next());
+            }
+        }
+
+        //check if dependencies are approved
+        Iterator iterator = mappings.get(file).dependencies.iterator();
+        while(iterator.hasNext())
+        {
+            validateFolder((String) iterator.next(), false);
+        }
+
+    }//validate folder ends
+
+
+}//Main class ends
